@@ -67,6 +67,41 @@ func TestAttemptToRemoveLearningMember(t *testing.T) {
 		},
 
 		{
+			name: "(ipv6) learning member pending deletion is removed",
+			initialObjectsForMachineLister: func() []runtime.Object {
+				m4 := machineWithHooksFor("m-4", "fd2e:6f44:5dd8:c956::10")
+				m4.DeletionTimestamp = &metav1.Time{}
+				machines := wellKnownMasterMachines()
+				machines = append(machines, m4)
+				return machines
+			}(),
+			initialObjectsForConfigMapTargetNSLister: []runtime.Object{wellKnownEtcdEndpointsConfigMap()},
+			initialEtcdMemberList: func() []*etcdserverpb.Member {
+				members := append(wellKnownEtcdMemberList(), &etcdserverpb.Member{
+					Name:      "m-4",
+					ID:        4,
+					IsLearner: true,
+					PeerURLs:  []string{"https://[fd2e:6f44:5dd8:c956::10]:1234"},
+				})
+				return members
+			}(),
+			validateFn: func(t *testing.T, fakeEtcdClient etcdcli.EtcdClient) {
+				memberList, err := fakeEtcdClient.MemberList(context.TODO())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(memberList) != 3 {
+					t.Errorf("expected exactly 3 members, got %v", len(memberList))
+				}
+				for _, member := range memberList {
+					if member.ID == 4 {
+						t.Fatalf("expected the member: %v to be removed from the etcd cluster but it wasn't", member)
+					}
+				}
+			},
+		},
+
+		{
 			name:                  "voting member pending deletion is NOT removed",
 			initialEtcdMemberList: wellKnownEtcdMemberList(),
 			initialObjectsForMachineLister: func() []runtime.Object {
@@ -76,6 +111,27 @@ func TestAttemptToRemoveLearningMember(t *testing.T) {
 				return machines
 			}(),
 			initialObjectsForConfigMapTargetNSLister: []runtime.Object{wellKnownEtcdEndpointsConfigMap()},
+			validateFn: func(t *testing.T, fakeEtcdClient etcdcli.EtcdClient) {
+				memberList, err := fakeEtcdClient.MemberList(context.TODO())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(memberList) != 3 {
+					t.Errorf("expected exactly 3 members, got %v", len(memberList))
+				}
+			},
+		},
+
+		{
+			name:                  "(ipv6) voting member pending deletion is NOT removed",
+			initialEtcdMemberList: wellKnownEtcdMemberListIpv6(),
+			initialObjectsForMachineLister: func() []runtime.Object {
+				machines := wellKnownMasterMachinesIpv6()
+				m0 := machines[0].(*machinev1beta1.Machine)
+				m0.DeletionTimestamp = &metav1.Time{}
+				return machines
+			}(),
+			initialObjectsForConfigMapTargetNSLister: []runtime.Object{wellKnownEtcdEndpointsConfigMapIpv6()},
 			validateFn: func(t *testing.T, fakeEtcdClient etcdcli.EtcdClient) {
 				memberList, err := fakeEtcdClient.MemberList(context.TODO())
 				if err != nil {
@@ -107,6 +163,39 @@ func TestAttemptToRemoveLearningMember(t *testing.T) {
 			initialObjectsForConfigMapTargetNSLister: func() []runtime.Object {
 				cm := wellKnownEtcdEndpointsConfigMap()
 				cm.Data["m-4"] = "10.0.139.81"
+				return []runtime.Object{cm}
+			}(),
+			validateFn: func(t *testing.T, fakeEtcdClient etcdcli.EtcdClient) {
+				memberList, err := fakeEtcdClient.MemberList(context.TODO())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(memberList) != 4 {
+					t.Errorf("expected exactly 4 members, got %v", len(memberList))
+				}
+			},
+		},
+
+		{
+			name: "(ipv6) excessive voting member pending deletion is NOT removed",
+			initialEtcdMemberList: func() []*etcdserverpb.Member {
+				members := append(wellKnownEtcdMemberList(), &etcdserverpb.Member{
+					Name:     "m-4",
+					ID:       4,
+					PeerURLs: []string{"https://[fd2e:6f44:5dd8:c956::10]:1234"},
+				})
+				return members
+			}(),
+			initialObjectsForMachineLister: func() []runtime.Object {
+				m4 := machineWithHooksFor("m-4", "fd2e:6f44:5dd8:c956::10")
+				m4.DeletionTimestamp = &metav1.Time{}
+				machines := wellKnownMasterMachines()
+				machines = append(machines, m4)
+				return machines
+			}(),
+			initialObjectsForConfigMapTargetNSLister: func() []runtime.Object {
+				cm := wellKnownEtcdEndpointsConfigMap()
+				cm.Data["m-4"] = "fd2e:6f44:5dd8:c956::10"
 				return []runtime.Object{cm}
 			}(),
 			validateFn: func(t *testing.T, fakeEtcdClient etcdcli.EtcdClient) {
@@ -405,7 +494,9 @@ func wellKnownEtcdEndpointsConfigMapIpv6() *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "etcd-endpoints", Namespace: "openshift-etcd"},
 		Data: map[string]string{
-			"m-0": "fd2e:6f44:5dd8:c956::16",
+			"m-1": "fd2e:6f44:5dd8:c956::15",
+			"m-2": "fd2e:6f44:5dd8:c956::16",
+			"m-3": "fd2e:6f44:5dd8:c956::17",
 		},
 	}
 }
@@ -433,9 +524,19 @@ func wellKnownEtcdMemberList() []*etcdserverpb.Member {
 func wellKnownEtcdMemberListIpv6() []*etcdserverpb.Member {
 	return []*etcdserverpb.Member{
 		{
-			Name:     "m-0",
-			ID:       8,
+			Name:     "m-1",
+			ID:       1,
+			PeerURLs: []string{"https://[fd2e:6f44:5dd8:c956::15]:1234"},
+		},
+		{
+			Name:     "m-2",
+			ID:       2,
 			PeerURLs: []string{"https://[fd2e:6f44:5dd8:c956::16]:1234"},
+		},
+		{
+			Name:     "m-3",
+			ID:       3,
+			PeerURLs: []string{"https://[fd2e:6f44:5dd8:c956::17]:1234"},
 		},
 	}
 }
@@ -519,5 +620,13 @@ func wellKnownMasterMachines() []runtime.Object {
 		machineWithHooksFor("m-1", "10.0.139.78"),
 		machineWithHooksFor("m-2", "10.0.139.79"),
 		machineWithHooksFor("m-3", "10.0.139.80"),
+	}
+}
+
+func wellKnownMasterMachinesIpv6() []runtime.Object {
+	return []runtime.Object{
+		machineWithHooksFor("m-1", "fd2e:6f44:5dd8:c956::15"),
+		machineWithHooksFor("m-2", "fd2e:6f44:5dd8:c956::16"),
+		machineWithHooksFor("m-3", "fd2e:6f44:5dd8:c956::17"),
 	}
 }
